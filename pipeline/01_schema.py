@@ -196,6 +196,11 @@ def convert(value, kind):
 
   return value
 
+# 앞에서 정산 테이블 생성 순서대로 데이터 저장
+# execute() 괄호안에는 SQL문 1개만 들어감 (테이블생성, 인덱스생성에 사용)
+# executemany() 괄호안에는 SQL문 1개 + 값 리스트(튜플 여러개) 이렇게 2개가 들어감, values 개수만큼 INSERT 반복실행
+# 진행순서: 테이블생성(execute) -> 값변환 -> INSERT(executemany) -> FK인덱스생성(execute) -> commit(확정저장)
+
 for name in table_order:
   table = tables[name]
   con.execute(build_create(name, table))
@@ -214,8 +219,3 @@ for name in table_order:
   for col, _owner in table["fks"]:
     con.execute(f"CREATE INDEX idx_{name}_{col} on {name}({col})")
 con.commit()
-
-# 앞에서 정산 테이블 생성 순서대로 데이터 저장
-# execute() 괄호안에는 SQL문 1개만 들어감 (테이블생성, 인덱스생성에 사용)
-# executemany() 괄호안에는 SQL문 1개 + 값 리스트(튜플 여러개) 이렇게 2개가 들어감, values 개수만큼 INSERT 반복실행
-# 진행순서: 테이블생성(execute) -> 값변환 -> INSERT(executemany) -> FK인덱스생성(execute) -> commit(확정저장)
