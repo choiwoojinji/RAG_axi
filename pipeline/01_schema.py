@@ -159,22 +159,25 @@ def build_create(name, table):
 
 
 # 테이블 생성 순서 지정을 위한 함수
+# FK가 가리키는 부모테이블이 먼저 done에 들어가야 자식테이블을 order에 넣는 방식 (위상정렬)
 def sort_by_dependency(tables):
-  done = set() 
-  order = [] 
+  done = set()  # 순서 정해진 테이블 이름 모음
+  order = []  # 실제 생성순서 리스트
 
   while len(order) < len(tables):
-    moved = False
-  
+    moved = False  # 이번 바퀴에 하나라도 order에 추가됐는지 체크
+
     for name, table in tables.items():
       if name in done:
         continue
-     
+
+      # 이 테이블의 FK가 참조하는 부모테이블들이 전부 done이면 이제 만들어도 됨
       if all(owner in done for _, owner in table["fks"]):
         order.append(name)
         done.add(name)
         moved = True
 
+    # 한바퀴 돌았는데 아무것도 못넣었으면(순환참조 등) 남은거 그냥 다 붙이고 종료
     if not moved:
       order += [n for n in tables if n not in done]
       break
