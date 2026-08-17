@@ -45,13 +45,15 @@ def looks_int(text):
 
 
 # 소수 판별 함수
-def looks_float(text):  
+def looks_float(text):
+  # 일단 float()로 변환되는지부터 확인
   try:
     float(text)
-  
+
   except ValueError:
     return False
-  
+
+  # "1" 같은 정수문자열도 float() 변환은 되므로, 점이 있어야만 진짜 소수로 인정
   if "." not in text:
       return False
 
