@@ -34,11 +34,13 @@ for path in sorted(DATA_DIR.glob("*.csv")):
 
 
 # 해당 값이 정수인지 확인하는 함수
-def looks_int(text):  
+def looks_int(text):
+  # 음수부호 떼고 자릿수만 검사
   body = text[1:] if text.startswith("-") else text
 
-  if not body.isdigit():      
-    return False  
+  if not body.isdigit():
+    return False
+  # 2자리 이상인데 0으로 시작하면 전화번호 등으로 보고 정수 취급 안함
   return not (len(body) > 1 and body.startswith("0"))
 
 
