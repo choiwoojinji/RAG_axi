@@ -145,17 +145,20 @@ for name, table in tables.items():
   table["fks"] = fks
 
 
+# CREATE TABLE문 문자열을 만들어주는 함수
 def build_create(name, table):
   lines = []
 
+  # 컬럼마다 "컬럼명 타입" 한줄씩 만들고, PK인 컬럼이면 뒤에 PRIMARY KEY 붙임
   for col in table["columns"]:
     piece = f"   {col} {table['type'][col]}"
-  
+
     if col == table["pk"]:
       piece += " PRIMARY KEY"
 
     lines.append(piece)
- 
+
+  # FK로 잡힌 컬럼마다 FOREIGN KEY 제약조건 줄 추가
   for col, owner in table["fks"]:
     lines.append(f"   FOREIGN KEY ({col}) REFERENCES {owner}({col})")
 
