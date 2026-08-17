@@ -104,8 +104,10 @@ def infer_pk(columns, rows):
   return None
 
 # 특정 PK의 주인 테이블 찾기
-def owner_of(column, tables):  
+def owner_of(column, tables):
+  # "product_id" -> "product" 로 뒤에 "_id" 3글자 제거
   stem = column[:-3]
+  # 단수/복수(s, es) 다 시도해서 테이블 목록에 있는 이름 찾기
   for candidate in (stem, stem+"s", stem+"es") :
     if candidate in tables:
       return candidate
