@@ -44,6 +44,6 @@ if __name__ == "__main__":
   # C001이라는 아이디의 고객정보를 가져오는 구문
   info = one("SELECT * FROM customers WHERE customer_id = ?", ("C001",))
   print(info)
-
+  
   print(dicts("SELECT * FROM customers LIMIT 5"))
 
