@@ -39,7 +39,7 @@ def dashboard(customer_id):
   """, (customer_id,))
 
   if not profile:
-    return None 
+    return None # 리턴None
 
   purchases = dicts("""
     SELECT products.product_id, products.name, products.category, products.price,  --고객이 구매한 상품 정보
