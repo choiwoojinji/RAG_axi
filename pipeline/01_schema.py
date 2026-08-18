@@ -22,8 +22,10 @@ con.execute("PRAGMA foreign_keys = ON")
 
 # csv파일 내용 리스트 변환 함수
 def read_csv(path):
+  # newline="" : csv모듈 권장옵션, 줄바꿈 문자를 csv가 알아서 처리하게 둠
   with open(path, encoding="utf-8", newline="") as f:
     reader = csv.DictReader(f)
+    # fieldnames는 첫줄(헤더), list(reader)는 나머지 행들을 딕셔너리 리스트로 반환
     return reader.fieldnames, list(reader)
 
 # csv-레코드 정렬
