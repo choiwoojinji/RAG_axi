@@ -38,11 +38,9 @@ def dashboard(customer_id):
     FROM customers WHERE customer_id = ?
   """, (customer_id,))
 
-  # 위에서 반환받은 고객 정보가 없으면 이후의 탐색문이 무의미하므로 강제 함수 종료
   if not profile:
     return None 
 
-  # 구매정보도 별도의 딕셔너리 형태로 반환받음
   purchases = dicts("""
     SELECT products.product_id, products.name, products.category, products.price,  --고객이 구매한 상품 정보
     purchases.purchased_at, purchases.rating, purchases.review    -- 고객의 구매내역 정보
@@ -53,26 +51,35 @@ def dashboard(customer_id):
   ratings = [row["rating"] for row in purchases if row["rating"] is not None]
   prices = [row["price"] for row in purchases if row["price"] is not None]
 
-  # {카테고리: 갯수}를 담을 빈 딕셔너리
   by_category = {}
   for row in purchases:
     by_category[row["category"]] = by_category.get(row["category"],0) +1
 
   # 고객정보와 구매 정보를 다시 상위 딕셔너리로 합쳐서 최종 반환
   return {
-    "customers" : profile[0],  
+    # 만약 기존 테이블 레코드에 JOIN을 쓰지않고 다른 테이블의 정보값을 추가로 연결하고 싶을때
+    # {**기존딕셔너리, key: value} : 기존 딕셔너리의 원본을 훼손시키지않고 복사한다음에 원하는 키값을 추가하는 방식 (immutable: 불변성)
+    "customers" : {**profile[0], "n_purchases":len(purchases)},  
     "avg_rating" :round(sum(ratings) / len(ratings), 2),  
     "total_spent" : sum(prices),
     "by_category" : by_category,
     "purchases": purchases[0]
   }
 
-if __name__ == "__main__": # main
+if __name__ == "__main__": 
   print(dashboard("C005"))
 
   """
   {
-    'customers': {'customer_id': 'C005', 'name': '이은수', 'age': 53, 'gender': 'F', 'skin_type': '중성', 'city': '부산'}, 'avg_rating': 3.2, 
+    'customers': {
+      'customer_id': 'C005', 
+      'name': '이은수', 
+      'age': 53, 
+      'gender': 'F', 
+      'skin_type': '중성', 
+      'city': '부산'
+    }, 
+    'avg_rating': 3.2, 
     'total_spent': 159600, 
     'by_category': {'에센스': 3, '클렌징오일': 1, '선크림': 1}, 
     'purchases': {
@@ -86,3 +93,5 @@ if __name__ == "__main__": # main
     }
   }
   """
+
+

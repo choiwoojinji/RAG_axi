@@ -1,247 +1,210 @@
-import re
 import csv
+import re
+import sqlite3
 import sys
 from pathlib import Path
-import sqlite3
 
-# 이 파일은 pipeline/ 안에 있는데 app/config.py 를 가져다 쓴다.
-# 파이썬은 "실행한 파일이 있는 폴더" 를 기준으로 모듈을 찾기 때문에,
-# 프로젝트 뿌리를 검색 경로에 직접 넣어 줘야 한다
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# 경로는 config.py 한 곳에서만 정한다. 여기서는 가져다 쓰기만 한다
 from app.config import DATA_DIR, DB_PATH
 
-# 이전에 만들어둔 DB파일이 있으면 지우고 매번 새로 생성
-if DB_PATH.exists():
-  DB_PATH.unlink()
-
-con = sqlite3.connect(DB_PATH)
-# FK 제약조건은 기본적으로 꺼져있어서 켜줘야 REFERENCES가 실제로 검증됨
-con.execute("PRAGMA foreign_keys = ON")
-
-# csv파일 내용 리스트 변환 함수
+# csv 파일정보 반환 함수
 def read_csv(path):
-  # newline="" : csv모듈 권장옵션, 줄바꿈 문자를 csv가 알아서 처리하게 둠
   with open(path, encoding="utf-8", newline="") as f:
     reader = csv.DictReader(f)
-    # fieldnames는 첫줄(헤더), list(reader)는 나머지 행들을 딕셔너리 리스트로 반환
-    return reader.fieldnames, list(reader)
-
-# csv-레코드 정렬
-for path in sorted(DATA_DIR.glob("*.csv")):
-  columns, rows = read_csv(path)
-
-  # 각 csv파일의 첫번째의 모든 필드값 확인
-  for column in columns:
-    value = rows[0][column]
-
-
-# 해당 값이 정수인지 확인하는 함수
+    return reader.fieldnames, list(reader)  
+  
+  
+# 문자열을 정수로 저장해도 되는지 판단 함수
 def looks_int(text):
-  # 음수부호 떼고 자릿수만 검사
-  body = text[1:] if text.startswith("-") else text
-
+  body = text[1:] if text.startswith("-") else text  
   if not body.isdigit():
     return False
-  # 2자리 이상인데 0으로 시작하면 전화번호 등으로 보고 정수 취급 안함
   return not (len(body) > 1 and body.startswith("0"))
 
 
-# 소수 판별 함수
+# 문자열을 실수로 저장해도 되는지 판단 함수
 def looks_float(text):
-  # 일단 float()로 변환되는지부터 확인
   try:
     float(text)
-
   except ValueError:
     return False
-
-  # "1" 같은 정수문자열도 float() 변환은 되므로, 점이 있어야만 진짜 소수로 인정
-  if "." not in text:
-      return False
-
-  return True
+  return "." in text
 
 
-# 날짜 판별 함수
+# 문자열이 YYYY-MM-DD 모양인지 판단 함수
 def looks_date(text):
-  # "YYYY-MM-DD" 형태(숫자4-숫자2-숫자2)와 문자열 전체가 정확히 일치할때만 날짜로 인정
   return re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is not None
 
-# 타입 추론 함수 생성
+
+# 한 컬럼의 값들을 보고 알맞은 DB 타입 반환 함수
 def infer_type(values):
-  # 빈 문자열은 판별대상에서 제외
-  seen = [v for v in values if v!=""]
+  seen = [v for v in values if v != ""]
 
   if not seen:
     return "TEXT"
-
-  # 순서대로 정수 -> 실수 -> 날짜 검사, 값 전부가 해당 타입이어야 그 타입으로 확정
   if all(looks_int(v) for v in seen):
     return "INTEGER"
-
   if all(looks_float(v) for v in seen):
     return "FLOAT"
-
   if all(looks_date(v) for v in seen):
     return "DATE"
-
-  # 위 조건 다 안맞으면 기본값은 TEXT
   return "TEXT"
 
 
-# 모든 csv파일을 하나씩 검사해서 컬럼명과 각 행의 값의 타입을 분석
-for path in sorted(DATA_DIR.glob("*.csv")):
-  columns, rows = read_csv(path)
-
-  for column in columns:
-    kind = infer_type([r[column]  for r in rows]) 
-
-
-# PK를 찾아주는 함수
+# 컬럼명과, 데이터를 전달해 PK를 찾는 함수
 def infer_pk(columns, rows):
-  # _id로 끝나는 컬럼만 PK 후보로 검사
   for col in columns:
     if not col.endswith("_id"):
       continue
-
     values = [r[col] for r in rows]
-    # 빈값이 하나라도 있으면 PK 자격 없음
+
     if "" in values:
       continue
-
-    # 값이 전부 서로 다르면(중복없음) PK로 확정
     if len(set(values)) == len(values):
       return col
   return None
 
-# 특정 PK의 주인 테이블 찾기
+
+# FK 후보 컬럼명의 주인으로 예상되는 테이블을 찾는 함수
 def owner_of(column, tables):
-  # "product_id" -> "product" 로 뒤에 "_id" 3글자 제거
   stem = column[:-3]
-  # 단수/복수(s, es) 다 시도해서 테이블 목록에 있는 이름 찾기
-  for candidate in (stem, stem+"s", stem+"es") :
+  for candidate in (stem, stem+"s",  stem+"es"):  
     if candidate in tables:
       return candidate
-
   return None
 
 
-# 1.모든 테이블별 필드, 데이터타입, PK 구하기
+# 테이블 생성 sql문 호출시 먼저 생성되야 하는 테이블 순서 반환하는 함수
+def sort_by_dependency(tables):
+  done = set() 
+  order = [] 
+  while len(order) < len(tables):
+    moved = False
+    for name, table in tables.items():
+      if name in done:
+        continue
+      if all(owner in done for _, owner in table["fks"]):  
+        order.append(name)   
+        done.add(name)
+        moved = True
+    if not moved:  
+      order += [n for n in tables if n not in done]
+      break
+  return order
+
+
+# 지금까지 생성한 csv정보로 실제 테이블 생성 SQL문 반환 함수
+def build_create(name, table):
+  lines = []
+
+  for col in table["columns"]:
+    piece = f"    {col} {table['type'][col]}"
+    if col == table["pk"]:
+      piece += " PRIMARY KEY"
+    lines.append(piece)
+
+  for col, owner in table["fks"]:
+    lines.append(f"    FOREIGN KEY ({col}) REFERENCES {owner}({col})")
+
+  return f"CREATE TABLE {name} (\n" + ",\n".join(lines) + "\n)"
+
+
+# 실제 생성된 테이블에 데이터 저장할때 각 컬럼별 자료형에 맞게 문자열의 데이터 타입을 변환하는 함수
+def convert(value, kind):
+  if value == "":
+    return None
+  if kind == "INTEGER":
+    return int(value)
+  if kind == "FLOAT":
+    return float(value)
+  return value
+
+
+# 1. 모든 테이블별 필드, 데이터타입, PK값 정보 저장하는 실행문
 tables = {}
-for path in sorted(DATA_DIR.glob("*.csv")):
+for path in sorted(DATA_DIR.glob("*.csv")): 
   columns, rows = read_csv(path)
-  # 파일명(확장자 제외)을 테이블명으로 사용, 컬럼/행/타입/PK정보를 한 딕셔너리에 모아둠
   tables[path.stem] = {
-    "columns": columns,
-    "rows":rows,
-    "type": {col: infer_type([r[col] for r in rows]) for col in columns},
-    "pk":infer_pk(columns, rows)
+    "columns": columns, 
+    "rows": rows, 
+    "type": {col: infer_type([r[col] for r in rows]) for col in columns}, 
+    "pk": infer_pk(columns, rows) 
   }
 
-# 2. 특정 테이블에 연결되어 있는 외래키 찾기
+
+# 2. 특정 테이블에 연결되어 있는 외래키 정보 찾아 기존 tables 정보에 추가
 for name, table in tables.items():
   fks = []
   for col in table["columns"]:
     if not col.endswith("_id"):
       continue
-    owner= owner_of(col, tables)
-
-    # 주인 테이블을 못찾았거나, 자기자신을 가리키면 FK 아님
+    owner = owner_of(col, tables)
     if not owner or owner == name:
-      continue
-
-    # 이 컬럼이 주인 테이블의 PK와 이름이 일치해야 진짜 FK로 인정
+      continue  
     if tables[owner]["pk"] != col:
       continue
-
-    fks.append(( col, owner))
-
+    fks.append((col, owner))
   table["fks"] = fks
 
 
-# CREATE TABLE문 문자열을 만들어주는 함수
-def build_create(name, table):
-  lines = []
-
-  # 컬럼마다 "컬럼명 타입" 한줄씩 만들고, PK인 컬럼이면 뒤에 PRIMARY KEY 붙임
-  for col in table["columns"]:
-    piece = f"   {col} {table['type'][col]}"
-
-    if col == table["pk"]:
-      piece += " PRIMARY KEY"
-
-    lines.append(piece)
-
-  # FK로 잡힌 컬럼마다 FOREIGN KEY 제약조건 줄 추가
-  for col, owner in table["fks"]:
-    lines.append(f"   FOREIGN KEY ({col}) REFERENCES {owner}({col})")
-
-  return f"CREATE TABLE {name} (\n"+ ",\n".join(lines) + "\n)"
-
-
-# 테이블 생성 순서 지정을 위한 함수
-# FK가 가리키는 부모테이블이 먼저 done에 들어가야 자식테이블을 order에 넣는 방식 (위상정렬)
-def sort_by_dependency(tables):
-  done = set()  # 순서 정해진 테이블 이름 모음
-  order = []  # 실제 생성순서 리스트
-
-  while len(order) < len(tables):
-    moved = False  # 이번 바퀴에 하나라도 order에 추가됐는지 체크
-
-    for name, table in tables.items():
-      if name in done:
-        continue
-
-      # 이 테이블의 FK가 참조하는 부모테이블들이 전부 done이면 이제 만들어도 됨
-      if all(owner in done for _, owner in table["fks"]):
-        order.append(name)
-        done.add(name)
-        moved = True
-
-    # 한바퀴 돌았는데 아무것도 못넣었으면(순환참조 등) 남은거 그냥 다 붙이고 종료
-    if not moved:
-      order += [n for n in tables if n not in done]
-      break
-
-  return order
-
+# 3. 실제 순서되로 실행되어야할 테이블명 리스트 확인
 table_order = sort_by_dependency(tables)
 
-# 각 필드의 데이터의 타입에 맞게 변환해주는 함수
-def convert(value, kind):
-  if value == "":
-    return None
 
-  if kind == "INTEGER":
-    return int(value)
+# 4. DB접속 및 테이블이 생성될 DB파일 만들기
+db_file = Path(DB_PATH)
 
-  if kind == "FLOAT":
-    return float(value)
+if db_file.exists():
+  db_file.unlink()
 
-  return value
+con = sqlite3.connect(db_file)
+con.execute("PRAGMA foreign_keys = ON")
 
-# 앞에서 정산 테이블 생성 순서대로 데이터 저장
-# execute() 괄호안에는 SQL문 1개만 들어감 (테이블생성, 인덱스생성에 사용)
-# executemany() 괄호안에는 SQL문 1개 + 값 리스트(튜플 여러개) 이렇게 2개가 들어감, values 개수만큼 INSERT 반복실행
-# 진행순서: 테이블생성(execute) -> 값변환 -> INSERT(executemany) -> FK인덱스생성(execute) -> commit(확정저장)
 
+# 5. 이전에 만든 테이블 생성 순서 리스트 반복 돌며 SQL문 자동 생성후 테이블 데이터 저장
 for name in table_order:
   table = tables[name]
-  con.execute(build_create(name, table))
 
+  # db파일에 테이블 생성
+  combined_sql = build_create(name, table)
+  con.execute(combined_sql)
+
+
+
+  # 생성된 테이블에 데이터 저장
   columns = table["columns"]
-
   placeholders = ", ".join("?" for _ in columns)
 
   values = [
-    tuple(convert(row[col], table["type"][col]) for col in columns)
-    for row in table["rows"]
+    tuple(convert(row[col], table["type"][col]) for col in columns) 
+    for row in table["rows"] 
   ]
 
-  con.executemany(f"INSERT INTO {name} ({", ".join(columns)}) VALUES ({placeholders})", values,)
+  con.executemany(
+    f"INSERT INTO {name} ({', '.join(columns)}) VALUES ({placeholders})", 
+    values, 
+  )
 
-  for col, _owner in table["fks"]:
-    con.execute(f"CREATE INDEX idx_{name}_{col} on {name}({col})")
+  # 위에서 데이터를 다 넣은 뒤 외래키 컬럼에 인덱스를 생성
+  for col, _owner in table["fks"]:   
+    con.execute(f"CREATE INDEX idx_{name}_{col} ON {name}({col})")
+
 con.commit()
+
+# customers 테이블에서 전체 행의 갯수 구해서 print로 출력
+# con.execute("sql문").fetchone()
+# customers_count = con.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
+# print(customers_count)
+
+# # customers 테이블에서 첫번째 행의 모든 정보 출력
+# customer_info = con.execute("SELECT * FROM customers").fetchone()
+# print(customer_info)
+
+# 지금 처럼 해당 파일에서 데이터확인 sql문을 실행하면 안되는 이유
+# 01_schema.py 하는일은 다음과 같음
+# csv파일 모두 불러움 -> 파일별로 테이블명과 들어갈 데이터분리 -> 각 데이터별로 타입 추론 -> 테이블 생성 sql문 제작 -> sql문 실행해서 테이블생성 -> 생성된 테이블에 각 csv파일 데이터를 데이터타입에 맞게 변환해서 저장 -> 생성된 데이터의 외래키 컬럼에 인덱싱 처리
+
+# 그래서 해당 파일에 단지 데이터 확인하는 쿼리문을 날리면 그거 하나때문의 위의 무거운 프로세스가 매번 계속 실행됨
+# 해결법 : 별도의 db.py를 app폴더 안쪽에 만들어서 파이프라인은 건들지않으면서 데이터조회함수를 호출해 사용
+con.close()
