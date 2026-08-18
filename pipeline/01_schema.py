@@ -12,10 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # 경로는 config.py 한 곳에서만 정한다. 여기서는 가져다 쓰기만 한다
 from app.config import DATA_DIR, DB_PATH
 
+# 이전에 만들어둔 DB파일이 있으면 지우고 매번 새로 생성
 if DB_PATH.exists():
   DB_PATH.unlink()
 
 con = sqlite3.connect(DB_PATH)
+# FK 제약조건은 기본적으로 꺼져있어서 켜줘야 REFERENCES가 실제로 검증됨
 con.execute("PRAGMA foreign_keys = ON")
 
 # csv파일 내용 리스트 변환 함수
