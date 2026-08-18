@@ -141,16 +141,18 @@ for path in sorted(DATA_DIR.glob("*.csv")):
   }
 
 # 2. 특정 테이블에 연결되어 있는 외래키 찾기
-for name, table in tables.items(): 
+for name, table in tables.items():
   fks = []
   for col in table["columns"]:
     if not col.endswith("_id"):
-      continue  
+      continue
     owner= owner_of(col, tables)
-  
+
+    # 주인 테이블을 못찾았거나, 자기자신을 가리키면 FK 아님
     if not owner or owner == name:
       continue
-  
+
+    # 이 컬럼이 주인 테이블의 PK와 이름이 일치해야 진짜 FK로 인정
     if tables[owner]["pk"] != col:
       continue
 
