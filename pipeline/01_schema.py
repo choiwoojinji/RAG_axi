@@ -132,6 +132,7 @@ def owner_of(column, tables):
 tables = {}
 for path in sorted(DATA_DIR.glob("*.csv")):
   columns, rows = read_csv(path)
+  # 파일명(확장자 제외)을 테이블명으로 사용, 컬럼/행/타입/PK정보를 한 딕셔너리에 모아둠
   tables[path.stem] = {
     "columns": columns,
     "rows":rows,
