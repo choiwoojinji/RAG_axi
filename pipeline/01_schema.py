@@ -71,11 +71,13 @@ def looks_date(text):
 
 # 타입 추론 함수 생성
 def infer_type(values):
+  # 빈 문자열은 판별대상에서 제외
   seen = [v for v in values if v!=""]
 
-  if not seen: 
+  if not seen:
     return "TEXT"
 
+  # 순서대로 정수 -> 실수 -> 날짜 검사, 값 전부가 해당 타입이어야 그 타입으로 확정
   if all(looks_int(v) for v in seen):
     return "INTEGER"
 
@@ -85,6 +87,7 @@ def infer_type(values):
   if all(looks_date(v) for v in seen):
     return "DATE"
 
+  # 위 조건 다 안맞으면 기본값은 TEXT
   return "TEXT"
 
 
