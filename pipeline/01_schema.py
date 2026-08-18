@@ -101,14 +101,17 @@ for path in sorted(DATA_DIR.glob("*.csv")):
 
 # PK를 찾아주는 함수
 def infer_pk(columns, rows):
+  # _id로 끝나는 컬럼만 PK 후보로 검사
   for col in columns:
     if not col.endswith("_id"):
       continue
-  
+
     values = [r[col] for r in rows]
-    if "" in values: 
+    # 빈값이 하나라도 있으면 PK 자격 없음
+    if "" in values:
       continue
-   
+
+    # 값이 전부 서로 다르면(중복없음) PK로 확정
     if len(set(values)) == len(values):
       return col
   return None
