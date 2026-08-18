@@ -66,6 +66,7 @@ def looks_float(text):
 
 # 날짜 판별 함수
 def looks_date(text):
+  # "YYYY-MM-DD" 형태(숫자4-숫자2-숫자2)와 문자열 전체가 정확히 일치할때만 날짜로 인정
   return re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is not None
 
 # 타입 추론 함수 생성
