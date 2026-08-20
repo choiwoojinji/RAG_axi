@@ -10,9 +10,7 @@ embeddings = HuggingFaceEmbeddings(
 )
 
 model = embeddings._client
-
 print("임베딩 모델 장치:", next(model.parameters()).device)
-
 vector = embeddings.embed_query("환불하고 싶어요")
 # print (len(vector))
 # print(vector)
@@ -26,4 +24,16 @@ texts = [
 
 vectors = embeddings.embed_documents(texts)
 
-# 두의미 사이의 각도의 유사성을 보는함수를 만들것 
+# 두의미 사이의 각도의 유사성을 보는 함수
+def cos(a,b):
+  return sum(x * y for x, y in zip(a,b)) 
+
+# 두의미 사이의 글자 자체가 얼마나 겹치는지 보는 함수
+def overlap(a,b):
+  return len(set(a) & set(b)) / len(set(a) | set(b))
+
+for i, j, label in [(0, 1, "환불 질문 ↔ 교환·반품 문장"),
+                  (0, 2, "환불 질문 ↔ 배송 문장"),
+                  (0, 3, "환불 질문 ↔ 비타민C 문장"),
+                  (1, 2, "교환·반품 문장 ↔ 배송 문장")]:
+  print(f"{label} / 글자겹침: {overlap(texts[i], texts[j]):.2f} / 코사인: {cos(vectors[i], vectors[j]):.4f}")
