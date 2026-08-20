@@ -3,16 +3,15 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# ========================================
+#  우선 루트경로 지정 및 필수 메서드 import
+# ========================================
 
-# 터미널이 출력하지 못하는 이모지나 특수문자같은걸 만났을때 대체 문자로 변경처리해서 에러를 방지
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(errors="replace")
 
-# transformers 실행시 발생하는 경고메시지등을 관리는 로깅처리 모듈
 from transformers import logging as hf_logging
 
-# 청킹하는 문자가 최대토큰갯수를 넘어설때 지저분하게 발생하는 에러 권고사항을 꺼줌
-# 중요한 에러 문구는 그대로 출력 처리
 hf_logging.set_verbosity_error()
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
@@ -22,108 +21,179 @@ from transformers import AutoTokenizer
 from app.config import DB_PATH, EMBED_TOKENIZER, EMBED_MAX_TOKENS
 from app.db import query
 
+tok = AutoTokenizer.from_pretrained(EMBED_TOKENIZER)
+
+# ========================================
+#  커스텀 함수 정의
+# ========================================
+def ntok(text):
+  return len(tok.encode(text))
+
+def dist(values):
+  return (f"최소 {min(values)} / 중앙 {int(statistics.median(values))} / 최대 {max(values)}")
+
+# 접두어를 포함시켜 본문 생성 함수 (모델에게 전달하는 데이터의 문맥을 빠르게 파악시키기 위함)
+# 세번째로 전달되는 인자값은 2차 청킹된 데이터가 1차 청킹만 완료된 본문
+def with_context(pname, section, body):
+  return f"[{pname} > {section}] {body}"
+
+# [스킨로션 > 주의사항] 어쩌구 이렇게 써야됩니다.
+
+
+# ================================================
+#  필수 조절값 (실무에선 이 수치값만 조절해서 업무 활용 가능)
+# ================================================
+CHUNK_SIZE = 324
+CHUNK_OVERLAP = 48 
+PREFIX_BUDGET = 32 # [제품명 > 중제목]
+RESPLIT_OVER = EMBED_MAX_TOKENS - PREFIX_BUDGET
+HEADERS = [("##", "section")] 
+SEPERATORS = ["\n\n", "\n", "다", "요", ".", ",", ""]
+
+
+
+# ================================================
+#  청킹할 데이터 원본을 DB 테이블엥서 꺼냄
+# ================================================
+details = query("""
+  SELECT product_details.product_id, products.name, product_details.detail
+  FROM product_details JOIN products ON product_details.product_id = products.product_id
+  ORDER BY product_details.product_id
+""")
+
+
+# ================================================
+#  추출한 데이터의 토큰 갯수 알아내기
+# ================================================
+full_tokens = [ntok(detail) for _, _, detail in details]
+over = [n for n in full_tokens if n > EMBED_MAX_TOKENS ]
+
+
+
+# ================================================
+#  1차 청킹 시작 : md파일의 제목을 기준으로 청킹
+# ================================================
+md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=HEADERS)
+sections = []
+
+for pid, pname, detail in details:
+  for doc in md_splitter.split_text(detail):
+    text = doc.page_content.strip() 
+    if not text:
+      continue
+    sections.append((pid, pname, doc.metadata.get("section", "(머릿말)"), text))
+
+
+# ==========================================================================
+#  2차 청킹 시작 : 1차 청킹이후 추가 청킹이 필요할때 SEPARATOR, CHUNK_SIZE 기준으로 청킹
+# ==========================================================================
+resplitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
+  tok, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, separators=SEPERATORS, keep_separator="end"
+)
+
+rows = [] 
+n_resplit = 0
+
+for pid, pname, section, text in sections:
+  if ntok(text) > RESPLIT_OVER:
+    n_resplit +=1
+    parts = resplitter.split_text(text)  
+  else:
+    parts = [text]  
+
+  for i, part in enumerate(parts):
+    rows.append((pid, pname, section, i, part))
+
+# ===================================
+#  화면에 출력할 원본 데이터테이블,
+#  검색을 위한 청킹 데이터가 들어갈 테이블
+#  청킹데이터의 좌표값이 들어갈 테이블 생성구문
+# ====================================
 con = sqlite3.connect(DB_PATH)
 con.execute("PRAGMA foreign_keys = ON")
 
-tok = AutoTokenizer.from_pretrained(EMBED_TOKENIZER)
+# 테이블이 만들어지는 순서는 section -> chunks -> chunk_vectors순이기 때문에
+# 테이블 제거시에는 역순으로 제거
+con.execute("DROP TABLE IF EXISTS chunk_vectors") # 의미추론을 위한 조각들의 좌표값이 들어가는 테이블
+con.execute("DROP TABLE IF EXISTS chunks") # 사용자 요청시 빠르게 문맥에 맞는 키워드를 탐색하기 위한 조각들 저장 테이블 
+con.execute("DROP TABLE IF EXISTS sections") # LLM이 참고해야 되는 원문이 들어가는 테이블
 
-# 텍스트를 인자로 전달받아서 모델이 이해하는 토큰으로 나누고 토큰의 갯수를 반환하는 함수
-def ntok(text):
-   return len(tok.encode(text))
+con.execute("""
+  CREATE TABLE sections (
+    section_id   INTEGER PRIMARY KEY,  --자동으로 들어가는 값 레코드가 추가될때마다 1씩 자동카운트
+    product_id   TEXT NOT NULL,        --어느 상품인지
+    section      TEXT NOT NULL,        --'주의사항' 같은 항 섹션별 제목
+    body         TEXT NOT NULL,        --접두어가 붙기전의 원문 (통짜 원문이 아닌 1차 청킹 이후 제목뒤의 본문)
+    n_tokens     INTEGER NOT NULL,     --(필요없을 수도 있음)
+    FOREIGN KEY (product_id) REFERENCES products(product_id)
+  )
+""")
 
-# 여러개의 문장을 토큰화 했을때 최소, 중간, 최대 토큰갯수를 파악하는 함수
-def dist(values):
-   return (f"최소 {min(values)} / 중앙 {int(statistics.median(values))} / 최대 {max(values)}")
+con.execute("""
+  CREATE TABLE chunks (
+    chunk_id     INTEGER PRIMARY KEY,   --자동으로 들어가는 각 레코드 PK  
+    section_id   INTEGER NOT NULL,      --해당 청킹된 조각이 바라보는 섹션 테이블 아이디
+    product_id   TEXT NOT NULL,         --해당 청킹된 조각이 바라보는 제품 아이디
+    section      TEXT NOT NULL,         --'주의사항' 같은 항 섹션별 제목
+    text         TEXT NOT NULL,         --접두어가 붙기전의 원문 (검색용도)
+    body         TEXT NOT NULL,         --접두어가 붙은 짤리지 않은 원문 (검색 키워드가 매칭되는 원문 탐색하기 위한)
+    n_tokens     INTEGER NOT NULL,
+    FOREIGN KEY (section_id) REFERENCES sections(section_id),
+    FOREIGN KEY (product_id) REFERENCES products(product_id)
+  )
+""")
 
-CHUNK_SIZE = 100
-CHUNK_OVERLAP = 48
-PREFIX_BUDGET = 32  #접두사 [상품명 > 위치] 본문내용
-RESPLIT_OVER = EMBED_MAX_TOKENS - PREFIX_BUDGET
-HEADERS = [("##", "section")] # 청킹할 데이터의 표시 경계 구분점 생성 (Markdown)
-SEPERATORS = ["\n\n", "\n", "다", "요", ".", ",", ""]
+# 생성된 테이블의 외래키 컬럼에 index 추가
+con.execute("CREATE INDEX idx_chunks_proudct_id ON chunks(product_id)")
+con.execute("CREATE INDEX idx_sections_proudct_id ON chunks(product_id)")
 
-# Document(
-#    page_content="수분을 공급하는 크림입니다"
-#    metadata={"section": "제품소개"}
-# )
 
-if __name__ == "__main__":
-  details = query("""
-    SELECT product_details.product_id, products.name, product_details.detail
-    FROM product_details JOIN products ON product_details.product_id = products.product_id
-    ORDER BY product_details.product_id
-  """)
+# ===================================
+#  테이블에 데이터 저장
+# ====================================
+# sections 테이블에 데이터 저장
+section_id_of = {}
+# {
+#   ("P001","제품설명"):1,
+#   ("P001","주의사항"):2,
+#   ("P001","성분"):3,
+# }
 
-  # 각 상품별 청킹하기 전 상태의 제품상세 설명 데이터의 토큰수 모음
-  full_tokens = [ntok(detail) for _, _, detail in details]
+# sections테이블과 chunks 테이블을 조인시키지 않으면 연결시킬수 있는 접점이 없음
+# 2개 테이블에 접점일수 있는 부분은 동일하게 들어가는 컬럼명인 pid, section밖에 없음
+# 저 두개의 값을 키로 활용하는 공통의 접점을 생성
+# section 테이블에서 필드값에 숫자는 무조건 정수인 PK가 지정되어 있기 때문에 공통의 컬럼값을 매칭처리 필요 (pic, section)
 
-  # 원본에서 각 청크데이터중 최태토큰수를 넘어간 데이터 리스트
-  over = [n for n in full_tokens if n > EMBED_MAX_TOKENS ]
+# 이렇게 번거롭게 sections테이블과 chunks 테이블을 연결하는 이유
+# 테이블에서 원본 데이터를 꺼낸이후에 청킹을 시작하면 문제가 안되지만
+# 유지보수의 편의성을 위해서 실제 DB에 데이터를 저장하기 전에 청킹과 벡터라이징을 미리 끝내놓은 상태
+# 이때 청킹이 완료된 상태이기 때문에 저 2개의 테이블은 연결할 방법이 없음 
+# 이떄 유일한 접점이 (상품아이디와 상품의 섹션 제목) 해당 필드가 공통으로 공유하는 값이 청킹 데이터가 봐라바야될 원본 테이블의 행
 
-  # 1. 단계: 일단은 제목별로 본문 분리
-  # 지금부터는 글자수가 아니라 '## 주의사항' 같은 md의 제목을 경계로 해서 문자를 짜름(청킹)
-  md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=HEADERS)
-  # 글에서 ## 제품소개, ## 주요성분 같은 2단계 제목을 발견할때마다 본문을 분리해서 저장할 빈 리스트 생성
-  sections = []
+for pid, _pname, section, text in sections:
+  cur = con.execute(
+    "INSERT INTO sections (product_id, section, body, n_tokens) VALUES (?,?,?,?)",
+    (pid, section, text, ntok(text)),
+  )
+  # sections와 chunks 테이블을 연결할 공통의 id값 
+  section_id_of[(pid, section)] = cur.lastrowid
 
-  for pid, pname, detail in details:
-    for doc in md_splitter.split_text(detail):
-      text = doc.page_content.strip() # 앞뒤공백이 제거된 md제목기준으로 나눈 본문 덩어리
-
-      if not text:
-        continue
-
-      sections.append((pid, pname, doc.metadata.get("section", "(머릿말)"), text))
-      # (제품아이디, 제품이름, 마크다운 제목, 제목에 해당하는 본문내용)
-
-  # print(sections[0][2])
-  # print("------")
-  # print(sections[0][3])
-
-  # 2단계- 1단계에서 분리한 본문내용의 최대 토큰수용치를 넘어설때 2차 청킹필요
-  resplitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
-    tok, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, separators=SEPERATORS, keep_separator="end"
+# chunks 테이블에 데이터 저장
+for pid, pname, section, chunk_index, body in rows:
+  text = with_context(pname, section, part)
+  con.execute("""
+    INSERT INTO chunks (section_id, product_id, section, chunk_index, text, body, n_tokens)
+    VALUES (?,?,?,?,?,?,?)""", (section_id_of[(pid, section)], pid, section, chunk_index, text, text, ntok(part)  ),
   )
 
-  rows = [] #(product_id, product_name, section, chunk_index, body)
-  n_resplit = 0
-  resplit_log = [] # 2차 청킹이 실제로 발동한 섹션만 기록 (제품아이디, 제품명, 섹션명, 원본토큰수, 조각리스트)
+con.commit()
 
-  
-  # 상품아이디, 상품이름, 문단의제목, 문단의 내용 (제품목록)
-  for pid, pname, section, text in sections:
-    # md파일에서 잘라난 본문내용이 최대토큰수보다 넘어서면 카운트1 증가시키면서 2차 청킹작업 시작
-    if ntok(text) > RESPLIT_OVER:
-      n_resplit +=1
-      # 문자열의 리스트로 반환
-      parts = resplitter.split_text(text)    
-      # 2차 청킹시 만들어지는 청크 데이터 갯수 
-      print(len(parts))   
-      resplit_log.append((pid, pname, section, ntok(text), parts))
-    # 만약 넘치지 않으면 그냥 그대로 저장
-    else:
-      parts = [text]    
 
-    for i, part in enumerate(parts):
-      rows.append((pid, pname, section, i, part))
+# =============================================
+#  임베딩이 없을때 데이터 검색의 한계 
+# =============================================
 
 
 
 
 
-
-  """
-    문자 데이터 청킹 흐름 (보통 실무에서 아래 순서로 작업 프로세스가 고착화되어 있음)
-
-    **필수로 이해해야 되는 개념**
-    1- 일단 마크다운의 제목 구분자로 해서 의미단위로 먼저 짜름 (의미단의)
-    (분기-A) 1차 단계에서 모든 청킹데이터가 최대토큰수안에 들어오면 그냥 무시
-    (분기-B) 1차 단계에서 따른 청킹데이터중 최대토큰을 넘어가는게 있으면 2차 청킹작업 시작
-
-    2- 1차에서 짤린 청킹덩어리중 최대토큰이 넘어가는 덩어리는 다시 반복돌면서 이번엔 문장단위로 청킹시도 (문장단위)
-    3- 2차에서 짤랐는데도 아직도 최대토큰수를 넘어가면 계속 반복돌며 청킹
-
-    **추가적으로 알아두면 좋은 개념**
-    [상품명 > 위치] 본문내용 : 이런식으로 본문앞에 구분자를 붙이는 이유 
-    - LLM 한테 청킹된 데이터를 전달할때 해당 데이터의 제목과 출처를 같이 알려줘서 본문 데이터의 맥락을 파악하게 하기 위함 
-  """
