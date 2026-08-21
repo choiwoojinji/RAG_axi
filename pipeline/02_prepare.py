@@ -18,8 +18,8 @@ from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharac
 
 from transformers import AutoTokenizer
 
-from app.config import DB_PATH, EMBED_TOKENIZER, EMBED_MAX_TOKENS
-from app.db import query
+from app.core.config import DB_PATH, EMBED_TOKENIZER, EMBED_MAX_TOKENS
+from app.core.db import query
 
 tok = AutoTokenizer.from_pretrained(EMBED_TOKENIZER)
 

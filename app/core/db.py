@@ -10,7 +10,7 @@
 """
 
 import sqlite3
-from app.config import DB_PATH
+from app.core.config import DB_PATH
 con = sqlite3.connect(DB_PATH)
 
 # 여러개의 행을 list[tuple] 형태로 반환하는 함수

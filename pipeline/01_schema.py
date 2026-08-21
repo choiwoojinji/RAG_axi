@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import DATA_DIR, DB_PATH
+from app.core.config import DATA_DIR, DB_PATH
 
 # csv 파일정보 반환 함수
 def read_csv(path):

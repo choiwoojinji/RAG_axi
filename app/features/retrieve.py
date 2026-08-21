@@ -8,7 +8,7 @@
   - 추천후보 : 특정고객에게 팔릴만한 상품 추리는 것
 """
 
-from app.db import dicts
+from app.core.db import dicts
 
 # 고객목록 + 각 고객의 구매 건수 반환 함수
 def customer_list(limit=None):
